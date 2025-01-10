@@ -1,13 +1,14 @@
 import sys
 import threading
 from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QLabel, QFileDialog, QHBoxLayout, QTextEdit
-from PySide6.QtCore import Signal, Slot, Qt
+from PySide6.QtCore import Signal, Qt
 from PySide6 import QtGui, QtCore
 import cv2
 import datetime
 from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from numpy import linspace
+import json
 
 class VideoProcessor(QWidget):
     update_label_signal = Signal(str)
@@ -35,6 +36,8 @@ class VideoProcessor(QWidget):
         self.setGeometry(100, 100, 1280, 820)
 
         self.model_path = ""
+
+        self.read_config()
 
         self.txt_edit = QTextEdit(self)
         self.txt_edit.setReadOnly(True)
@@ -94,7 +97,6 @@ class VideoProcessor(QWidget):
         sys.stdout = sys.__stdout__
         event.accept()
 
-    @Slot(str)
     def append_output(self, text):
         cursor = self.txt_edit.textCursor()
         cursor.movePosition(QtGui.QTextCursor.End)
@@ -102,18 +104,15 @@ class VideoProcessor(QWidget):
         self.txt_edit.setTextCursor(cursor)
         self.txt_edit.ensureCursorVisible()
 
-    @Slot(QtGui.QImage)
     def update_frame(self, frame):
         self.video_label.setPixmap(QtGui.QPixmap.fromImage(frame))
 
-    @Slot()
     def choose_file(self):
         self.file_name, _ = QFileDialog.getOpenFileName(self, 'Choose Video File', '', 'Videos (*.mp4 *.avi)')
         if self.file_name:
             self.status_label.setText(f'File selected: {self.file_name}')
             self.start_btn.setEnabled(True)
 
-    @Slot()
     def choose_output_file(self):
         self.output_file_name, _ = QFileDialog.getSaveFileName(self, 'Save Output File', '', 'MP4 Files (*.mp4)')
         if self.output_file_name:
@@ -121,7 +120,6 @@ class VideoProcessor(QWidget):
                 self.output_file_name += '.mp4'
             self.status_label.setText(f'Output file selected: {self.output_file_name}')
 
-    @Slot()
     def start_processing(self):
         if self.file_name:
             self.is_running = True
@@ -132,7 +130,6 @@ class VideoProcessor(QWidget):
 
             threading.Thread(target=self.process_video, daemon=True).start()
 
-    @Slot()
     def stop_processing(self):
         self.is_running = False
         self.start_btn.setEnabled(True)
@@ -140,9 +137,13 @@ class VideoProcessor(QWidget):
         self.status_label.setText("Processing paused.")
         self.enable_save_button()
 
-    @Slot()
     def update_status(self, text):
         self.status_label.setText(text)
+
+    def read_config(self):
+        with open("data/config.json", "r") as f:
+            data = json.load(f)
+            self.model_path = data["model_path"]
 
     def process_video(self):
         PITCH_LENGTH = 105
