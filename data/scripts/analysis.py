@@ -11,7 +11,7 @@ from numpy import linspace
 import json
 from azure.iot.device import IoTHubDeviceClient
 from azure.iot.device import Message
-from helper import create_video_writer
+from .helper import create_video_writer
 
 class VideoProcessor(QWidget):
     update_label_signal = Signal(str)
@@ -35,7 +35,7 @@ class VideoProcessor(QWidget):
         self.connection_string = ""
 
     def initUI(self):
-        self.setWindowTitle('Football Player Detection')
+        self.setWindowTitle('Football Analysis')
         self.setMinimumSize(1280, 820)
         self.setGeometry(100, 100, 1280, 820)
 
@@ -270,18 +270,6 @@ class EmittingStream(QtCore.QObject):
 
     def write(self, text):
         self.text_written.emit(str(text))
-
-def create_video_writer(video_cap, output_filename):
-
-    frame_width = int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = int(video_cap.get(cv2.CAP_PROP_FPS))
-
-    fourcc = cv2.VideoWriter_fourcc(*'MP4V')
-    writer = cv2.VideoWriter(output_filename, fourcc, fps,
-                             (frame_width, frame_height))
-
-    return writer
 
 def Analysis():
     app = QApplication(sys.argv)
