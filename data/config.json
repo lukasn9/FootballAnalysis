@@ -1,4 +1,5 @@
 {
     "version": "1.0.0",
-    "model_path": "data/models/best.pt"
+    "model_path": "data/models/best.pt",
+    "iot_hub_key": ""
 }

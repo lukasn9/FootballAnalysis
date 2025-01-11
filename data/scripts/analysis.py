@@ -9,6 +9,9 @@ from ultralytics import YOLO
 from deep_sort_realtime.deepsort_tracker import DeepSort
 from numpy import linspace
 import json
+from azure.iot.device import IoTHubDeviceClient
+from azure.iot.device import Message
+from helper import create_video_writer
 
 class VideoProcessor(QWidget):
     update_label_signal = Signal(str)
@@ -29,6 +32,7 @@ class VideoProcessor(QWidget):
         self.last_frame_time = None
         self.current_frame = 0
         self.frame_count = 0
+        self.connection_string = ""
 
     def initUI(self):
         self.setWindowTitle('Football Player Detection')
@@ -144,6 +148,18 @@ class VideoProcessor(QWidget):
         with open("data/config.json", "r") as f:
             data = json.load(f)
             self.model_path = data["model_path"]
+            self.connection_string = data["iot_hub_key"]
+
+    def send_message(self, message_content):
+        message = Message(message_content)
+
+        try:
+            self.device_client.send_message(message)
+            print(f"Message sent: {message_content}")
+
+        except Exception as ex:
+            print("Error occurred while sending message:", ex)
+            sys.exit()
 
     def process_video(self):
         PITCH_LENGTH = 105
@@ -168,6 +184,13 @@ class VideoProcessor(QWidget):
         self.tracker = DeepSort(MAX_AGE)
 
         self.last_frame_time = datetime.datetime.now()
+
+        if self.connection_string != "":
+            try:
+                self.device_client = IoTHubDeviceClient.create_from_connection_string(self.connection_string)
+                self.device_client.connect()
+            except:
+                sys.exit("Can't connect to the IotHub")
 
         while self.is_running:
             self.current_frame += 1
@@ -215,9 +238,17 @@ class VideoProcessor(QWidget):
             if self.current_frame / self.frame_count >= 0.25:
                 self.enable_save_button()
 
+            if self.connection_string != "":
+                self.send_message(print_objects)
+
         self.video_cap.release()
         writer.release()
         cv2.destroyAllWindows()
+
+        if self.connection_string != "":
+            self.device_client.disconnect()
+            self.device_client.shutdown()
+
         self.enable_save_button()
 
     def enable_save_button(self):

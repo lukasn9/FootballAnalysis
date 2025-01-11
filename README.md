@@ -11,5 +11,6 @@ The tool can track, count, and vizualise the number of goals, passes, shots on/o
 
 ## MS Azure
 The Football Analysis tool can be connected to an Azure IoT Hub in order to vizualise the generated data using Power BI for ease of access.
+To connect your Azure IoT Hub, input your connection key in the `config.json` file.
 
 ![Azure](readme_assets/pic4.png)
