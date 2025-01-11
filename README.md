@@ -14,3 +14,6 @@ The Football Analysis tool can be connected to an Azure IoT Hub in order to vizu
 To connect your Azure IoT Hub, input your connection key in the `config.json` file.
 
 ![Azure](readme_assets/pic4.png)
+
+## Installation
+The installation is very simple. Just download the `.zip` file, extract it, and run the `.exe` file inside the folder.
