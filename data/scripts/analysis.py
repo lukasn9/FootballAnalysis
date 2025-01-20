@@ -1,6 +1,7 @@
 import sys
 import threading
-from PySide6.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QLabel, QFileDialog, QHBoxLayout, QTextEdit
+from PySide6.QtWidgets import (QApplication, QWidget, QPushButton, QVBoxLayout, 
+                              QLabel, QFileDialog, QHBoxLayout, QTextEdit)
 from PySide6.QtCore import Signal, Qt
 from PySide6 import QtGui, QtCore
 import cv2
@@ -12,6 +13,32 @@ import json
 from azure.iot.device import IoTHubDeviceClient
 from azure.iot.device import Message
 from .helper import create_video_writer
+
+class CustomButton(QPushButton):
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setStyleSheet("""
+            QPushButton {
+                background-color: #2C3E50;
+                color: #ECF0F1;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: 600;
+                min-width: 130px;
+            }
+            QPushButton:hover {
+                background-color: #3498DB;
+            }
+            QPushButton:pressed {
+                background-color: #2980B9;
+            }
+            QPushButton:disabled {
+                background-color: #34495E;
+                color: #7F8C8D;
+            }
+        """)
 
 class VideoProcessor(QWidget):
     update_label_signal = Signal(str)
@@ -33,63 +60,116 @@ class VideoProcessor(QWidget):
         self.current_frame = 0
         self.frame_count = 0
         self.connection_string = ""
+        
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #1E272E;
+                color: #ECF0F1;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+        """)
 
     def initUI(self):
         self.setWindowTitle('Football Analysis')
-        self.setMinimumSize(1280, 820)
-        self.setGeometry(100, 100, 1280, 820)
+        self.setMinimumSize(1280, 920)
+        self.setGeometry(100, 100, 1280, 920)
 
         self.model_path = ""
-
         self.read_config()
 
         self.txt_edit = QTextEdit(self)
         self.txt_edit.setReadOnly(True)
-        self.txt_edit.setMinimumHeight(100)
+        self.txt_edit.setMinimumHeight(200)
+        self.txt_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: #212D3A;
+                border: 2px solid #2C3E50;
+                border-radius: 8px;
+                padding: 12px;
+                font-family: 'Consolas', monospace;
+                font-size: 14px;
+                color: #E4F1FE;
+            }
+            QTextEdit:focus {
+                border-color: #3498DB;
+            }
+            QScrollBar:vertical {
+                border: none;
+                background: #2C3E50;
+                width: 14px;
+                border-radius: 7px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #3498DB;
+                min-height: 30px;
+                border-radius: 7px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #2980B9;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
 
         sys.stdout = EmittingStream()
         sys.stdout.text_written.connect(self.append_output)
 
-        self.choose_file_btn = QPushButton('Choose File', self)
-        self.choose_file_btn.setFixedWidth(150)
+        self.choose_file_btn = CustomButton('Choose File', self)
+        self.save_file_btn = CustomButton('Save File', self)
+        self.start_btn = CustomButton('Start', self)
+        self.stop_btn = CustomButton('Stop', self)
+
         self.choose_file_btn.clicked.connect(self.choose_file)
-
-        self.save_file_btn = QPushButton('Save File', self)
-        self.save_file_btn.setFixedWidth(150)
         self.save_file_btn.clicked.connect(self.choose_output_file)
-        self.save_file_btn.setEnabled(False)
-
-        self.start_btn = QPushButton('Start', self)
-        self.start_btn.setFixedWidth(150)
         self.start_btn.clicked.connect(self.start_processing)
-        self.start_btn.setEnabled(False)
-
-        self.stop_btn = QPushButton('Stop', self)
-        self.stop_btn.setFixedWidth(150)
         self.stop_btn.clicked.connect(self.stop_processing)
+
+        self.save_file_btn.setEnabled(False)
+        self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(False)
 
         self.status_label = QLabel('No file selected', self)
         self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #E4F1FE;
+                font-size: 14px;
+                font-weight: 600;
+                padding: 12px;
+                background-color: #2C3E50;
+                border-radius: 6px;
+                margin: 8px 0;
+            }
+        """)
 
         self.video_label = QLabel(self)
-        self.video_label.setFixedSize(1280, 650)
+        self.video_label.setFixedSize(1280, 550)
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("background-color: black;")
+        self.video_label.setStyleSheet("""
+            QLabel {
+                background-color: #141A1F;
+                border: 2px solid #2C3E50;
+                border-radius: 10px;
+            }
+        """)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.choose_file_btn)
         button_layout.addWidget(self.save_file_btn)
         button_layout.addWidget(self.start_btn)
         button_layout.addWidget(self.stop_btn)
+        button_layout.setSpacing(15)
+        button_layout.setContentsMargins(10, 0, 10, 0)
 
         layout = QVBoxLayout()
         layout.addLayout(button_layout)
         layout.addWidget(self.status_label)
-        layout.addWidget(self.video_label, 2)
-        layout.addWidget(self.txt_edit, 1)
-
-        layout.setContentsMargins(0, 10, 0, 0)
+        layout.addWidget(self.video_label)
+        layout.addWidget(self.txt_edit)
+        layout.setSpacing(15)
+        layout.setContentsMargins(25, 25, 25, 25)
 
         self.setLayout(layout)
 
@@ -273,6 +353,25 @@ class EmittingStream(QtCore.QObject):
 
 def Analysis():
     app = QApplication(sys.argv)
+
+    app.setStyle('Fusion')
+
+    dark_palette = QtGui.QPalette()
+    dark_palette.setColor(QtGui.QPalette.Window, QtGui.QColor(30, 39, 46))
+    dark_palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor(236, 240, 241))
+    dark_palette.setColor(QtGui.QPalette.Base, QtGui.QColor(33, 45, 58))
+    dark_palette.setColor(QtGui.QPalette.AlternateBase, QtGui.QColor(44, 62, 80))
+    dark_palette.setColor(QtGui.QPalette.ToolTipBase, QtGui.QColor(236, 240, 241))
+    dark_palette.setColor(QtGui.QPalette.ToolTipText, QtGui.QColor(236, 240, 241))
+    dark_palette.setColor(QtGui.QPalette.Text, QtGui.QColor(228, 241, 254))
+    dark_palette.setColor(QtGui.QPalette.Button, QtGui.QColor(44, 62, 80))
+    dark_palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(236, 240, 241))
+    dark_palette.setColor(QtGui.QPalette.BrightText, QtGui.QColor(52, 152, 219))
+    dark_palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(52, 152, 219))
+    dark_palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(236, 240, 241))
+
+    app.setPalette(dark_palette)
+    
     window = VideoProcessor()
     window.show()
-    sys.exit(app.exec())
+    sys.exit(app.exec_())
