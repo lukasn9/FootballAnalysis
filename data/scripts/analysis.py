@@ -321,6 +321,8 @@ class VideoProcessor(QWidget):
             if self.connection_string != "":
                 self.send_message(print_objects)
 
+        self.stop_processing()
+
         self.video_cap.release()
         writer.release()
         cv2.destroyAllWindows()
