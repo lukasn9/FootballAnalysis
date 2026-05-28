@@ -2,4 +2,5 @@ Datasets/
 data/
 test/
 training/
+runs/
 *.pt
