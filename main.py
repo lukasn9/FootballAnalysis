@@ -3,14 +3,18 @@ main.py — YOLO26 football detector
 
 Usage:
     python main.py prepare
-    python main.py train --size n --epochs 50
+    python main.py train --size n --epochs 50 --batch 40 --imgsz 1280
+    python main.py train --size n --resume
     python main.py validate --size n
     python main.py export --size n
     python main.py track --video data/clip.mp4
     python main.py csv --video data/clip.mp4
     python main.py label --images data/my_images
     python main.py stats --csv runs/detections.csv
-    python main.py collect
+    python main.py label-video --video data/clip.mp4 --every 5   # extract + auto-label video frames for Roboflow
+    python main.py collect          # copy only the filtered training images to data/coco_filtered/
+    python main.py clean            # delete .npy/.cache files from the dataset dir (frees ~50 GB after training)
+    python main.py roboflow         # zip data/labeled/ into roboflow_export.zip ready for Roboflow upload
 """
 
 import argparse
@@ -52,11 +56,27 @@ def best_weights(size):
 # ── Functions ──────────────────────────────────────────────────────────────────
 
 def prepare():
-    """Filter COCO annotations → YOLO labels + football.yaml."""
-    labels_root = ROOT / "data" / "labels"
+    """Filter COCO annotations → YOLO labels + football.yaml.
+
+    Dataset layout produced (standard Ultralytics structure so that
+    Ultralytics' label auto-resolution works: swap \\images\\ for \\labels\\):
+        Datasets/coco2017/
+            images/train2017/   <- JPEG images
+            images/val2017/
+            labels/train2017/   <- filtered YOLO .txt labels
+            labels/val2017/
+        data/
+            train.txt           <- filtered list (only images with person/ball)
+            val.txt
+            football.yaml
+    """
+    images_root = COCO_ROOT / "images"
+    labels_root = COCO_ROOT / "labels"
     yaml_path   = ROOT / "data" / "football.yaml"
 
-    def build(ann_file, img_dir, label_dir, list_out):
+    def build(ann_file, split, list_out):
+        img_dir   = images_root / split
+        label_dir = labels_root / split
         label_dir.mkdir(parents=True, exist_ok=True)
         print(f"[prepare] Reading {ann_file.name} ...", flush=True)
         data = json.loads(ann_file.read_text())
@@ -90,21 +110,28 @@ def prepare():
             else:
                 skipped += 1
         list_out.write_text("\n".join(paths))
-        print(f"  {ann_file.stem}: {kept:,} kept, {skipped:,} skipped")
+        print(f"  {split}: {kept:,} kept, {skipped:,} skipped")
 
     ann_dir = COCO_ROOT / "annotations"
     print("[prepare] Starting train split ...", flush=True)
-    build(ann_dir / "instances_train2017.json", COCO_ROOT / "train2017", labels_root / "train2017", ROOT / "data" / "train.txt")
+    build(ann_dir / "instances_train2017.json", "train2017", ROOT / "data" / "train.txt")
     print("[prepare] Starting val split ...", flush=True)
-    build(ann_dir / "instances_val2017.json",   COCO_ROOT / "val2017",   labels_root / "val2017",   ROOT / "data" / "val.txt")
+    build(ann_dir / "instances_val2017.json",   "val2017",   ROOT / "data" / "val.txt")
 
     names = "\n".join(f"  {i}: {n}" for i, n in CLASS_NAMES.items())
     yaml_path.write_text(f"path: {ROOT}\ntrain: data/train.txt\nval: data/val.txt\nnc: 2\nnames:\n{names}")
-    print(f"YAML → {yaml_path}")
+    print(f"YAML -> {yaml_path}")
 
 
-def train(size="n", epochs=50, batch=8, imgsz=1280):
+def train(size="n", epochs=50, batch=-1, imgsz=1280, resume=False):
     model_name = f"yolo26{size}"
+    if resume:
+        last = best_weights(size).parent / "last.pt"
+        if not last.exists():
+            raise FileNotFoundError(f"No checkpoint found at {last}")
+        print(f"[train] Resuming from {last}", flush=True)
+        YOLO(str(last)).train(resume=True)
+        return
     YOLO(f"{model_name}.pt").train(
         data          = str(ROOT / "data" / "football.yaml"),
         project       = str(ROOT / "runs"),
@@ -163,7 +190,7 @@ def track(video_in, size="n", conf=0.25, imgsz=1280):
     tracked = glob.glob(str(ROOT / "runs" / "tracking" / "*.mp4"))
     if tracked:
         shutil.copy(tracked[0], video_out)
-        print(f"Saved → {video_out}")
+        print(f"Saved -> {video_out}")
 
 
 def extract_csv(video_in, size="n", conf=0.25, imgsz=1280):
@@ -186,13 +213,14 @@ def extract_csv(video_in, size="n", conf=0.25, imgsz=1280):
                              CLASS_NAMES[cls], round(float(box.conf.item()), 4),
                              x1, y1, x2, y2, round((x1+x2)/2, 1), round((y1+y2)/2, 1)])
             if i % 100 == 0: print(f"  frame {i:,}")
-    print(f"Saved → {csv_out}")
+    print(f"Saved -> {csv_out}")
 
 
 def label(images_dir, size="n", conf=0.25, imgsz=1280):
     images_dir = Path(images_dir)
     out = ROOT / "data" / "labeled"
-    (out / "images").mkdir(parents=True, exist_ok=True)
+    (out / "images").mkdir(parents=True, exist_ok=True)    # clean originals → for Roboflow
+    (out / "preview").mkdir(parents=True, exist_ok=True)   # annotated copies → for visual review
     (out / "labels").mkdir(parents=True, exist_ok=True)
     print(f"[label] Loading model ...", flush=True)
     model = YOLO(str(best_weights(size)))
@@ -201,14 +229,56 @@ def label(images_dir, size="n", conf=0.25, imgsz=1280):
     for r in model.predict(source=str(images_dir), conf=conf, imgsz=imgsz,
                             device=get_device(), stream=True):
         p = Path(r.path)
-        shutil.copy(p, out / "images" / p.name)
+        shutil.copy(p, out / "images" / p.name)                    # original, no boxes
+        r.save(filename=str(out / "preview" / p.name))             # boxes drawn on for review
         if not r.boxes or len(r.boxes) == 0:
             empty += 1; continue
         lines = [f"{int(b.cls.item())} {' '.join(f'{v:.6f}' for v in b.xywhn[0].tolist())}"
                  for b in r.boxes]
         (out / "labels" / p.stem).with_suffix(".txt").write_text("\n".join(lines))
         saved += 1
-    print(f"Labeled: {saved}  |  Empty: {empty}  →  {out}")
+    print(f"Labeled: {saved}  |  Empty: {empty}  ->  {out}")
+    print(f"  images/  <- clean originals (use these for Roboflow)")
+    print(f"  preview/ <- annotated copies (use these to visually review)")
+
+
+def label_video(video_in, size="n", conf=0.25, imgsz=1280, every=1, preview_pct=5):
+    """Extract frames from a video, auto-label each one, and save to data/labeled/.
+
+    --every N          keep every Nth frame (default 1 = all frames)
+    --preview-pct N    save annotated preview for N% of kept frames (default 5)
+    """
+    import cv2
+    video_in = Path(video_in)
+    out = ROOT / "data" / "labeled"
+    (out / "images").mkdir(parents=True, exist_ok=True)
+    (out / "preview").mkdir(parents=True, exist_ok=True)
+    (out / "labels").mkdir(parents=True, exist_ok=True)
+
+    preview_every = max(1, round(100 / preview_pct))
+    print(f"[label-video] Loading model ...", flush=True)
+    model = YOLO(str(best_weights(size)))
+    print(f"[label-video] Processing {video_in.name} (every={every}, preview={preview_pct}%) ...", flush=True)
+    saved = empty = skipped = kept = 0
+    for i, r in enumerate(model.predict(source=str(video_in), imgsz=imgsz, conf=conf,
+                                         device=get_device(), stream=True, verbose=False)):
+        if i % every != 0:
+            skipped += 1; continue
+        stem = f"{video_in.stem}_{i:06d}"
+        cv2.imwrite(str(out / "images" / f"{stem}.jpg"), r.orig_img)
+        if kept % preview_every == 0:
+            r.save(filename=str(out / "preview" / f"{stem}.jpg"))
+        kept += 1
+        if not r.boxes or len(r.boxes) == 0:
+            empty += 1; continue
+        lines = [f"{int(b.cls.item())} {' '.join(f'{v:.6f}' for v in b.xywhn[0].tolist())}"
+                 for b in r.boxes]
+        (out / "labels" / stem).with_suffix(".txt").write_text("\n".join(lines))
+        saved += 1
+        if saved % 100 == 0:
+            print(f"  {i:,} frames processed — {saved} labeled, {empty} empty")
+    print(f"[label-video] Done: {saved} labeled, {empty} empty, {skipped} skipped")
+    print(f"  preview/ contains ~{round(kept * preview_pct / 100)} of {kept} frames")
 
 
 def stats(csv_path):
@@ -236,7 +306,7 @@ def stats(csv_path):
         axes[2].plot(per_frame.index, per_frame[col], label=col, linewidth=0.8)
     axes[2].set_title("Detections per frame"); axes[2].legend()
     plt.tight_layout(); plt.savefig(Path(csv_path).parent / "stats.png", dpi=150)
-    print(f"Plot saved → {Path(csv_path).parent / 'stats.png'}")
+    print(f"Plot saved -> {Path(csv_path).parent / 'stats.png'}")
 
 
 def collect_used_images():
@@ -254,7 +324,51 @@ def collect_used_images():
         for p in tqdm(paths, desc=split, unit="img"):
             shutil.copy(p, dest / split / Path(p).name)
 
-    print(f"[collect] Done → {dest}")
+    print(f"[collect] Done -> {dest}")
+
+
+def roboflow_export():
+    """Package data/labeled/ into a Roboflow-ready zip (YOLOv8 format)."""
+    import zipfile
+    labeled   = ROOT / "data" / "labeled"
+    images_dir = labeled / "images"
+    labels_dir = labeled / "labels"
+
+    images = sorted(images_dir.glob("*") if images_dir.exists() else [])
+    labels = sorted(labels_dir.glob("*.txt") if labels_dir.exists() else [])
+
+    if not images:
+        print("[roboflow] No images found in data/labeled/images/ — run label first.")
+        return
+
+    out_zip = ROOT / "data" / "roboflow_export.zip"
+    with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        # classes.txt — required by Roboflow for YOLO format
+        zf.writestr("classes.txt", "\n".join(CLASS_NAMES[i] for i in sorted(CLASS_NAMES)))
+
+        for img in images:
+            zf.write(img, f"images/{img.name}")
+
+        for lbl in labels:
+            zf.write(lbl, f"labels/{lbl.name}")
+
+    print(f"[roboflow] Exported {len(images)} images, {len(labels)} labels -> {out_zip}")
+    print("[roboflow] Upload steps:")
+    print("  1. New project → Object Detection")
+    print("  2. Upload → select roboflow_export.zip")
+    print("  3. Format → YOLOv8")
+
+
+def clean_cache():
+    """Delete Ultralytics disk-cache files (.npy, .cache) from the dataset dirs."""
+    exts = {".npy", ".cache"}
+    total_files, total_bytes = 0, 0
+    for path in COCO_ROOT.rglob("*"):
+        if path.suffix in exts and path.is_file():
+            total_bytes += path.stat().st_size
+            path.unlink()
+            total_files += 1
+    print(f"[clean] Removed {total_files:,} cache files ({total_bytes / 1e9:.2f} GB)")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -268,8 +382,9 @@ if __name__ == "__main__":
     t = sub.add_parser("train")
     t.add_argument("--size",   default="n", choices=["n","s","m","l"])
     t.add_argument("--epochs", type=int, default=50)
-    t.add_argument("--batch",  type=int, default=8)
+    t.add_argument("--batch",  type=int, default=-1)
     t.add_argument("--imgsz",  type=int, default=1280)
+    t.add_argument("--resume", action="store_true", help="resume from last.pt")
 
     v = sub.add_parser("validate")
     v.add_argument("--size", default="n", choices=["n","s","m","l"])
@@ -293,7 +408,19 @@ if __name__ == "__main__":
     lb.add_argument("--size",   default="n", choices=["n","s","m","l"])
     lb.add_argument("--conf",   type=float, default=0.25)
 
+    lv = sub.add_parser("label-video")
+    lv.add_argument("--video", required=True)
+    lv.add_argument("--size",  default="n", choices=["n","s","m","l"])
+    lv.add_argument("--conf",  type=float, default=0.25)
+    lv.add_argument("--imgsz", type=int,   default=1280)
+    lv.add_argument("--every",       type=int,   default=1,
+                    help="keep every Nth frame (e.g. 5 = one frame per ~0.2s at 25fps)")
+    lv.add_argument("--preview-pct", type=int,   default=5,
+                    help="percentage of kept frames to save as annotated previews (default 5)")
+
     sub.add_parser("collect")
+    sub.add_parser("clean")
+    sub.add_parser("roboflow")
 
     st = sub.add_parser("stats")
     st.add_argument("--csv", required=True)
@@ -301,11 +428,14 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     if   args.cmd == "prepare":  prepare()
-    elif args.cmd == "train":    train(args.size, args.epochs, args.batch, args.imgsz)
+    elif args.cmd == "train":    train(args.size, args.epochs, args.batch, args.imgsz, args.resume)
     elif args.cmd == "validate": validate(args.size)
     elif args.cmd == "export":   export(args.size, args.imgsz)
     elif args.cmd == "track":    track(args.video, args.size, args.conf)
     elif args.cmd == "csv":      extract_csv(args.video, args.size, args.conf)
-    elif args.cmd == "label":    label(args.images, args.size, args.conf)
+    elif args.cmd == "label":       label(args.images, args.size, args.conf)
+    elif args.cmd == "label-video": label_video(args.video, args.size, args.conf, args.imgsz, args.every, args.preview_pct)
     elif args.cmd == "stats":    stats(args.csv)
     elif args.cmd == "collect":  collect_used_images()
+    elif args.cmd == "clean":    clean_cache()
+    elif args.cmd == "roboflow": roboflow_export()
